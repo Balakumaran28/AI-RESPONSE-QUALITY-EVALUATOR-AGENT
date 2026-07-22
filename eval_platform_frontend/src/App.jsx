@@ -1,4 +1,3 @@
-import React from 'react';
 import RagSearchConsole from './components/RagSearchConsole';
 import EvaluationPanel from './components/EvaluationPanel';
 import DocumentUploader from './components/DocumentUploader';

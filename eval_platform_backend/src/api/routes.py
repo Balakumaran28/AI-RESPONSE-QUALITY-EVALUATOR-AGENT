@@ -1,9 +1,10 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from src.api.schemas import EvaluationPayload, EvaluationBatchRequest
+from src.api.schemas import EvaluationPayload, EvaluationBatchRequest, EvaluationRequest, EvaluationResponse
 from typing import List
 from uuid import uuid4
 from pydantic import BaseModel
+from src.agents.eval_agents import accuracy_judge_agent, hallucination_detection_agent, relevance_judge_agent
 from src.rag.vector_store import query_reference_knowledge
 
 app = FastAPI(
@@ -37,6 +38,34 @@ async def search_vector_store(payload: SearchRequest):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/v1/evaluate", status_code=status.HTTP_200_OK, response_model=EvaluationResponse)
+async def evaluate_response(payload: EvaluationRequest):
+    if not payload.question.strip() or not payload.response.strip():
+        raise HTTPException(status_code=400, detail="Question and response cannot be empty.")
+
+    try:
+        context_chunks = [chunk.strip() for chunk in payload.retrieved_contexts if chunk.strip()]
+        if not context_chunks:
+            search_results = query_reference_knowledge(query_text=payload.question, top_k=3)
+            documents = search_results.get("documents", []) if isinstance(search_results, dict) else []
+            for document_group in documents:
+                for chunk in document_group:
+                    if chunk and chunk.strip():
+                        context_chunks.append(chunk.strip())
+
+        relevance = await relevance_judge_agent(payload.question, payload.response)
+        accuracy = await accuracy_judge_agent(context_chunks, payload.response, payload.question)
+        hallucination = await hallucination_detection_agent(context_chunks, payload.response, payload.question)
+
+        return EvaluationResponse(
+            retrieved_contexts=context_chunks,
+            relevance=relevance.model_dump(),
+            accuracy=accuracy.model_dump(),
+            hallucination=hallucination.model_dump(),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
 @app.post("/api/v1/evaluate/single", status_code=status.HTTP_202_ACCEPTED)
 async def submit_single_evaluation(payload: EvaluationPayload):
